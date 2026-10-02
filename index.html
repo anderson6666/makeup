@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>妆友约 | 化妆互助预约</title>
+  <style>
+    :root {
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #242424;
+      background: #f7f7f5;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e7e7e3;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .topbar, main { width: min(1040px, calc(100% - 32px)); margin: auto; }
+    .topbar {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand { font-size: 20px; font-weight: 750; }
+    main { padding: 28px 0 60px; }
+    h1 { font-size: 26px; margin: 0 0 8px; }
+    h2 { font-size: 18px; margin: 0 0 16px; }
+    p { line-height: 1.6; }
+    .muted { color: #777; font-size: 14px; }
+    .toolbar, .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .toolbar { margin: 22px 0; }
+    .layout { display: grid; grid-template-columns: 1fr 320px; gap: 28px; align-items: start; }
+    .section { border-top: 1px solid #deded9; padding-top: 20px; margin-top: 24px; }
+    .post { padding: 18px 0; border-bottom: 1px solid #e3e3df; }
+    .post h3 { font-size: 17px; margin: 0 0 8px; }
+    .post p { margin: 8px 0; }
+    .tag { color: #326b54; font-size: 13px; margin-right: 10px; }
+    form { display: grid; gap: 10px; }
+    input, textarea, select, button {
+      font: inherit;
+      min-height: 40px;
+      border: 1px solid #d4d4cf;
+      border-radius: 5px;
+      padding: 9px 11px;
+      background: #fff;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    button { cursor: pointer; font-weight: 600; }
+    button.primary { color: white; background: #27654d; border-color: #27654d; }
+    button.subtle { background: transparent; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .auth { display: flex; gap: 8px; align-items: center; }
+    .auth input { width: 170px; }
+    .notice { padding: 12px 14px; background: #fff; border-left: 3px solid #27654d; margin: 16px 0; }
+    .booking { font-size: 14px; padding: 12px 0; border-bottom: 1px solid #e3e3df; }
+    .hidden { display: none !important; }
+    @media (max-width: 760px) {
+      .layout { grid-template-columns: 1fr; }
+      .topbar { align-items: flex-start; flex-direction: column; padding: 12px 0; }
+      .auth { width: 100%; flex-wrap: wrap; }
+      .auth input { flex: 1; min-width: 130px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="topbar">
+    <div class="brand">妆友约</div>
+    <div class="auth" id="authControls">
+      <input id="email" type="email" placeholder="邮箱" autocomplete="email">
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      <button class="primary" id="signIn">登录</button>
+      <button class="subtle" id="signUp">注册</button>
+    </div>
+    <div class="row hidden" id="userControls">
+      <span id="userLabel" class="muted"></span>
+      <button id="signOut">退出</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <h1>找到一起变美的妆友</h1>
+  <p class="muted">发布化妆服务或寻找妆友，通过预约申请确认时间。</p>
+  <div id="message" class="notice hidden" role="status"></div>
+
+  <div class="toolbar">
+    <select id="typeFilter" aria-label="帖子类型">
+      <option value="">全部帖子</option>
+      <option value="offer">提供化妆</option>
+      <option value="looking">寻找化妆</option>
+    </select>
+    <input id="cityFilter" placeholder="按城市筛选">
+    <button id="refresh">刷新</button>
+  </div>
+
+  <div class="layout">
+    <section>
+      <h2>最新帖子</h2>
+      <div id="posts"><p class="muted">正在加载...</p></div>
+
+      <div class="section">
+        <h2>我的预约</h2>
+        <div id="myBookings"><p class="muted">登录后查看预约。</p></div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="section" style="margin-top:0;padding-top:0;border:0">
+        <h2>发布帖子</h2>
+        <form id="postForm">
+          <select name="type" required>
+            <option value="offer">提供化妆服务</option>
+            <option value="looking">寻找化妆服务</option>
+          </select>
+          <input name="title" maxlength="100" placeholder="标题" required>
+          <input name="city" maxlength="60" placeholder="城市" required>
+          <input name="style" maxlength="60" placeholder="妆容类型，例如日常妆、婚礼妆">
+          <input name="price" type="number" min="0" step="1" placeholder="价格（元，可填 0）">
+          <input name="available_at" type="datetime-local" aria-label="可预约时间">
+          <textarea name="description" maxlength="2000" placeholder="介绍一下需求、经验或服务内容" required></textarea>
+          <button class="primary" type="submit">发布帖子</button>
+        </form>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+  // Supabase Project URL 和 anon/public key。
+  const SUPABASE_URL = "https://fgywpwbevfesodvdfksp.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_lkOqACF2CpLgcBgQe9ZJ_Q_ID1yGobi";
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const $ = (selector) => document.querySelector(selector);
+  let currentUser = null;
+  let postsById = new Map();
+
+  function notify(text) {
+    const box = $("#message");
+    box.textContent = text;
+    box.classList.remove("hidden");
+    window.setTimeout(() => box.classList.add("hidden"), 5000);
+  }
+
+  function escapeHtml(value = "") {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[char]);
+  }
+
+  function formatDate(value) {
+    if (!value) return "时间待商议";
+    return new Date(value).toLocaleString("zh-CN", {
+      year: "numeric", month: "numeric", day: "numeric",
+      hour: "2-digit", minute: "2-digit"
+    });
+  }
+
+  async function syncUser() {
+    const { data } = await supabase.auth.getUser();
+    currentUser = data.user;
+    $("#authControls").classList.toggle("hidden", !!currentUser);
+    $("#userControls").classList.toggle("hidden", !currentUser);
+    $("#userLabel").textContent = currentUser?.email ?? "";
+    $("#postForm").querySelector("button").disabled = !currentUser;
+    await loadBookings();
+    await loadPosts();
+  }
+
+  async function loadPosts() {
+    const type = $("#typeFilter").value;
+    const city = $("#cityFilter").value.trim();
+
+    let query = supabase.from("posts")
+      .select("id,user_id,type,title,city,style,price,available_at,description,created_at")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (type) query = query.eq("type", type);
+    if (city) query = query.ilike("city", `%${city}%`);
+
+    const { data, error } = await query;
+    if (error) {
+      $("#posts").innerHTML = '<p class="muted">帖子加载失败，请检查 Supabase 配置和数据库策略。</p>';
+      return;
+    }
+
+    postsById = new Map((data ?? []).map((post) => [post.id, post]));
+    if (!data?.length) {
+      $("#posts").innerHTML = '<p class="muted">还没有符合条件的帖子。</p>';
+      return;
+    }
+
+    $("#posts").innerHTML = data.map((post) => {
+      const isOwner = currentUser?.id === post.user_id;
+      const typeLabel = post.type === "offer" ? "提供化妆" : "寻找化妆";
+      const price = post.price == null ? "价格面议" : `¥${post.price}`;
+      return `
+        <article class="post">
+          <h3>${escapeHtml(post.title)}</h3>
+          <span class="tag">${typeLabel}</span>
+          <span class="tag">${escapeHtml(post.city)}</span>
+          ${post.style ? `<span class="tag">${escapeHtml(post.style)}</span>` : ""}
+          <p>${escapeHtml(post.description)}</p>
+          <p class="muted">${price} · 可预约：${formatDate(post.available_at)}</p>
+          ${currentUser && !isOwner
+            ? `<button data-book="${post.id}">申请预约</button>`
+            : ""}
+        </article>`;
+    }).join("");
+  }
+
+  async function loadBookings() {
+    if (!currentUser) {
+      $("#myBookings").innerHTML = '<p class="muted">登录后查看预约。</p>';
+      return;
+    }
+
+    const { data, error } = await supabase.from("bookings")
+      .select("id,post_id,applicant_id,owner_id,booking_time,message,status,created_at")
+      .or(`applicant_id.eq.${currentUser.id},owner_id.eq.${currentUser.id}`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      $("#myBookings").innerHTML = '<p class="muted">预约加载失败。</p>';
+      return;
+    }
+    if (!data?.length) {
+      $("#myBookings").innerHTML = '<p class="muted">暂时没有预约记录。</p>';
+      return;
+    }
+
+    const statusNames = {
+      pending: "待确认", accepted: "已接受", rejected: "已拒绝",
+      cancelled: "已取消", completed: "已完成"
+    };
+
+    $("#myBookings").innerHTML = data.map((booking) => {
+      const post = postsById.get(booking.post_id);
+      const title = post?.title ?? "帖子";
+      const canRespond = booking.owner_id === currentUser.id && booking.status === "pending";
+      return `<div class="booking">
+        <strong>${escapeHtml(title)}</strong>
+        <div>预约时间：${formatDate(booking.booking_time)} · ${statusNames[booking.status] ?? booking.status}</div>
+        ${booking.message ? `<div class="muted">${escapeHtml(booking.message)}</div>` : ""}
+        ${canRespond
+          ? `<div class="row" style="margin-top:8px">
+               <button data-booking="${booking.id}" data-status="accepted">接受</button>
+               <button data-booking="${booking.id}" data-status="rejected">拒绝</button>
+             </div>`
+          : ""}
+      </div>`;
+    }).join("");
+  }
+
+  $("#signUp").addEventListener("click", async () => {
+    const email = $("#email").value.trim();
+    const password = $("#password").value;
+    if (!email || password.length < 6) return notify("请输入邮箱，密码至少 6 位。");
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) return notify(error.message);
+    notify("注册请求已提交。若项目启用了邮箱验证，请先查收验证邮件。");
+    await syncUser();
+  });
+
+  $("#signIn").addEventListener("click", async () => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: $("#email").value.trim(),
+      password: $("#password").value
+    });
+    if (error) return notify(error.message);
+    await syncUser();
+  });
+
+  $("#signOut").addEventListener("click", async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) return notify(error.message);
+    await syncUser();
+  });
+
+  $("#postForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!currentUser) return notify("请先登录再发布帖子。");
+
+    const form = new FormData(event.currentTarget);
+    const priceValue = form.get("price");
+    const availableValue = form.get("available_at");
+    const { error } = await supabase.from("posts").insert({
+      user_id: currentUser.id,
+      type: form.get("type"),
+      title: String(form.get("title")).trim(),
+      city: String(form.get("city")).trim(),
+      style: String(form.get("style")).trim() || null,
+      price: priceValue === "" ? null : Number(priceValue),
+      available_at: availableValue ? new Date(availableValue).toISOString() : null,
+      description: String(form.get("description")).trim()
+    });
+
+    if (error) return notify(error.message);
+    event.currentTarget.reset();
+    notify("帖子已发布。");
+    await loadPosts();
+  });
+
+  $("#posts").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-book]");
+    if (!button) return;
+    if (!currentUser) return notify("请先登录再申请预约。");
+
+    const post = postsById.get(button.dataset.book);
+    if (!post) return;
+    const time = prompt("请输入希望预约的时间，例如：2025-06-15 14:00");
+    if (!time) return;
+    const parsedTime = new Date(time);
+    if (Number.isNaN(parsedTime.getTime())) return notify("时间格式无法识别。");
+
+    const message = prompt("给发布者留言（可留空）") ?? "";
+    const { error } = await supabase.from("bookings").insert({
+      post_id: post.id,
+      applicant_id: currentUser.id,
+      owner_id: post.user_id,
+      booking_time: parsedTime.toISOString(),
+      message: message.trim()
+    });
+    if (error) return notify(error.message);
+    notify("预约申请已发送。");
+    await loadBookings();
+  });
+
+  $("#myBookings").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-booking]");
+    if (!button) return;
+    const { error } = await supabase.from("bookings")
+      .update({ status: button.dataset.status })
+      .eq("id", button.dataset.booking);
+    if (error) return notify(error.message);
+    notify(button.dataset.status === "accepted" ? "已接受预约。" : "已拒绝预约。");
+    await loadBookings();
+  });
+
+  $("#refresh").addEventListener("click", loadPosts);
+  $("#typeFilter").addEventListener("change", loadPosts);
+  $("#cityFilter").addEventListener("input", () => {
+    clearTimeout(window.citySearchTimer);
+    window.citySearchTimer = setTimeout(loadPosts, 250);
+  });
+  supabase.auth.onAuthStateChange(() => syncUser());
+
+  await syncUser();
+</script>
+</body>
+</html>
