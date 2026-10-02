@@ -121,6 +121,36 @@
     .fade-in { animation: fadeIn .3s ease; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
+    /* 微信内置浏览器引导 */
+    #wechat-guide {
+      display: none;
+      position: fixed; inset: 0; z-index: 999;
+      background: rgba(38, 34, 28, .62);
+      backdrop-filter: blur(2px);
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    #wechat-guide.show { display: flex; }
+    .wechat-card {
+      background: #fff;
+      border-radius: 18px;
+      padding: 26px 22px;
+      max-width: 340px;
+      width: 100%;
+      text-align: center;
+      box-shadow: var(--shadow-lg);
+      animation: fadeIn .25s ease;
+    }
+    .wechat-card h2 { margin: 0 0 10px; font-size: 19px; }
+    .wechat-card p { margin: 0 0 6px; font-size: 14px; line-height: 1.7; color: var(--muted); }
+    .wechat-card .btn-row { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+    .wechat-tip {
+      font-size: 12px; color: var(--muted); line-height: 1.8;
+      margin-top: 12px; padding: 10px 12px;
+      background: var(--brand-soft); border-radius: 10px;
+    }
+    .wechat-tip b { color: var(--brand-strong); }
+
     @media (max-width: 820px) {
       .layout { display: flex; flex-direction: column; }
       .layout > section { order: 2; }
@@ -132,6 +162,20 @@
   </style>
 </head>
 <body>
+<!-- 微信内置浏览器引导：检测到 MicroMessenger 时展示 -->
+<div id="wechat-guide">
+  <div class="wechat-card">
+    <h2>请用浏览器打开</h2>
+    <p>微信内可能无法正常登录、发布或跳转。</p>
+    <div class="btn-row">
+      <button class="primary" id="wechatCopy">复制链接到浏览器</button>
+      <button class="subtle" id="wechatContinue">仍然在微信中打开</button>
+    </div>
+    <div class="wechat-tip">
+      更推荐的方式：点右上角 <b>···</b> → 选择 <b>「在浏览器打开」</b>，体验更完整。
+    </div>
+  </div>
+</div>
 <header>
   <div class="topbar">
     <div class="brand">
@@ -220,6 +264,42 @@
 
 <script type="module">
   import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+  // ---- 微信内置浏览器检测：提示复制链接到浏览器打开 ----
+  const isWechat = /MicroMessenger/i.test(navigator.userAgent);
+  const wechatGuide = document.getElementById("wechat-guide");
+  const copyBtn = document.getElementById("wechatCopy");
+  if (isWechat && wechatGuide) {
+    wechatGuide.classList.add("show");
+    document.body.style.overflow = "hidden"; // 遮罩期间锁定页面滚动
+  }
+  copyBtn?.addEventListener("click", async () => {
+    const url = location.href;
+    const done = () => {
+      copyBtn.textContent = "已复制，请在浏览器粘贴打开";
+      copyBtn.classList.add("primary");
+    };
+    try {
+      await navigator.clipboard.writeText(url);
+      done();
+    } catch (err) {
+      // 剪贴板被微信拦截时，退回兼容方案
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.cssText = "position:fixed;opacity:0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(); } catch (e2) { /* 忽略 */ }
+      ta.remove();
+      if (!copyBtn.textContent.startsWith("已复制")) {
+        copyBtn.textContent = "请长按地址复制，或在浏览器粘贴打开";
+      }
+    }
+  });
+  document.getElementById("wechatContinue")?.addEventListener("click", () => {
+    wechatGuide.classList.remove("show");
+    document.body.style.overflow = "";
+  });
 
   // Supabase Project URL 和 anon/public key。
   const SUPABASE_URL = "https://ujusttdnqprpxmocdpys.supabase.co";
