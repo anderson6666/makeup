@@ -196,7 +196,7 @@
       <div class="card rules" style="margin-bottom:18px">
         <h2>发布规则</h2>
         <ul>
-          <li>游客（未登录）：<span class="highlight">暂不能发布</span>，请先注册并登录。</li>
+          <li>游客（未登录）：<span class="highlight">每小时最多发布 1 个帖子</span>。</li>
           <li>登录用户：<span class="highlight">每小时最多发布 3 个帖子</span>，超出后请稍等。</li>
           <li>禁止发布违规内容：<span class="highlight">网址链接、色情低俗、暴力威胁、侮辱谩骂</span> 等会被屏蔽。</li>
         </ul>
@@ -241,12 +241,22 @@
   // ---- 发布频率规则 ----
   const RATE = {
     user: 3,            // 登录用户每小时最多 3 个
-    guest: 1,           // 游客每小时最多 1 个（当前后端 RLS 不允许游客发帖，仅保留定义）
+    guest: 1,           // 游客每小时最多 1 个
     windowMs: 60 * 60 * 1000,
     storageKey: (who) => `post_rate_${who}`
   };
+  // 游客访客标识：首次进入时生成并存 localStorage，用于数据库层限频 + 本地限频
+  function getVisitorId() {
+    let id = localStorage.getItem("visitor_id");
+    if (!id) {
+      id = (crypto.randomUUID && crypto.randomUUID()) ||
+           "v" + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+      localStorage.setItem("visitor_id", id);
+    }
+    return id;
+  }
   function rateKey() {
-    return currentUser ? RATE.storageKey(currentUser.id) : RATE.storageKey("guest");
+    return currentUser ? RATE.storageKey(currentUser.id) : RATE.storageKey(`guest_${getVisitorId()}`);
   }
   function recentPostTimes() {
     try {
@@ -323,8 +333,10 @@
     '<svg viewBox="0 0 40 40" role="img" aria-label="默认头像"><circle cx="20" cy="20" r="20" fill="#e6f0ea"/><circle cx="20" cy="15" r="6" fill="#2f6b52"/><path d="M20 23c-6 0-9 4-9 9v2h18v-2c0-5-3-9-9-9z" fill="#2f6b52"/></svg>';
   function avatarHtml() { return DEFAULT_AVATAR_SVG; }
 
-  function authorName(authorId) {
-    if (currentUser && authorId === currentUser.id) return nickname || "我";
+  function authorName(post) {
+    // 优先用发布时快照的昵称；登录用户自己的帖子显示当前昵称
+    if (post.author_name) return post.author_name;
+    if (currentUser && post.user_id === currentUser.id) return nickname || "我";
     return "妆友";
   }
   function currentAvatarName() {
@@ -345,10 +357,10 @@
     $("#userControls").classList.toggle("hidden", !currentUser);
     await setNicknameUI();
     const formBtn = $("#postForm").querySelector("button");
-    formBtn.disabled = !currentUser;
+    formBtn.disabled = false; // 游客也可发帖（每小时 1 个）
     $("#postStatus").textContent = currentUser
-      ? `今天你还可以发布 ${postTimesLeft()} 个帖子（每小时 3 个）`
-      : "游客暂不能发布，请先登录（每小时可发布 3 个）。";
+      ? `你还可以发布 ${postTimesLeft()} 个帖子（登录用户每小时 3 个）`
+      : `你还可以发布 ${postTimesLeft()} 个帖子（游客每小时 1 个）`;
     await loadBookings();
     await loadPosts();
   }
@@ -358,7 +370,7 @@
     const city = $("#cityFilter").value.trim();
 
     let query = supabase.from("posts")
-      .select("id,user_id,type,title,city,style,price,available_at,description,created_at")
+      .select("id,user_id,visitor_id,author_name,type,title,city,style,price,available_at,description,created_at")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(50);
@@ -388,7 +400,7 @@
           <span class="avatar">${avatarHtml()}</span>
           <div class="post-body">
             <div class="author-line">
-              <span class="author-name">${escapeHtml(authorName(post.user_id))}</span>
+              <span class="author-name">${escapeHtml(authorName(post))}</span>
               <span class="tag">${typeLabel}</span>
               <span class="tag">${escapeHtml(post.city)}</span>
               ${post.style ? `<span class="tag">${escapeHtml(post.style)}</span>` : ""}
@@ -489,10 +501,11 @@
   // ---- 发帖（含频率限制 + 敏感词 + 防重复提交）----
   $("#postForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!currentUser) return notify("请先登录再发布帖子。", true);
     if (submitting) return; // 防止重复提交
     if (postTimesLeft() <= 0) {
-      return notify("已达发布上限：每小时最多发布 3 个帖子，请稍后再试。", true);
+      const who = currentUser ? "登录用户" : "游客";
+      const limit = currentUser ? RATE.user : RATE.guest;
+      return notify(`已达发布上限：${who}每小时最多发布 ${limit} 个帖子，请稍后再试。`, true);
     }
 
     const form = event.currentTarget;
@@ -509,7 +522,9 @@
     const priceValue = data.get("price");
     const availableValue = data.get("available_at");
     const payload = {
-      user_id: currentUser.id,
+      user_id: currentUser?.id ?? null,
+      visitor_id: currentUser ? null : getVisitorId(),
+      author_name: nickname || null,   // 昵称快照，用于帖子列表展示
       type: data.get("type"),
       title,
       city: String(data.get("city")).trim(),
@@ -526,7 +541,7 @@
 
     const { error } = await supabase.from("posts").insert(payload);
     submitting = false;
-    btn.disabled = !currentUser;
+    btn.disabled = false;
     btn.textContent = "发布帖子";
 
     if (error) return notify(error.message, true);
