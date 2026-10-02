@@ -184,6 +184,7 @@
       <div class="card">
         <h2 class="section-title">最新帖子</h2>
         <div id="posts"><p class="empty">正在加载...</p></div>
+        <div id="pagination" class="row hidden" style="justify-content:center;padding-top:16px;border-top:1px solid var(--line);margin-top:6px"></div>
 
         <div class="section-title" style="margin-top:26px">
           <h2>我的预约</h2>
@@ -237,6 +238,9 @@
   let nickname = "";
   let postsById = new Map();
   let submitting = false;
+  const PAGE_SIZE = 20;      // 每页 20 个帖子
+  let page = 1;              // 当前页码
+  let totalPosts = 0;        // 帖子总数（用于分页）
 
   // ---- 发布频率规则 ----
   const RATE = {
@@ -370,24 +374,28 @@
     const city = $("#cityFilter").value.trim();
 
     let query = supabase.from("posts")
-      .select("id,user_id,visitor_id,author_name,type,title,city,style,price,available_at,description,created_at")
+      .select("id,user_id,visitor_id,author_name,type,title,city,style,price,available_at,description,created_at", { count: "exact" })
       .eq("status", "active")
       .order("created_at", { ascending: false })
-      .limit(50);
+      .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
+      .limit(PAGE_SIZE);
 
     if (type) query = query.eq("type", type);
     if (city) query = query.ilike("city", `%${city}%`);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       $("#posts").innerHTML = '<p class="empty">帖子加载失败，请检查 Supabase 配置和数据库策略。</p>';
+      renderPagination();
       return;
     }
 
+    totalPosts = count ?? (data ?? []).length;
     postsById = new Map((data ?? []).map((p) => [p.id, p]));
-    $("#postCount").textContent = (data ?? []).length;
+    $("#postCount").textContent = totalPosts;
     if (!data?.length) {
       $("#posts").innerHTML = '<p class="empty">还没有符合条件的帖子。</p>';
+      renderPagination();
       return;
     }
 
@@ -414,7 +422,31 @@
           </div>
         </article>`;
     }).join("");
+    renderPagination();
   }
+
+  // 渲染分页控件（每页 PAGE_SIZE 条，超过则自动分页）
+  function renderPagination() {
+    const box = $("#pagination");
+    const totalPages = Math.max(1, Math.ceil(totalPosts / PAGE_SIZE));
+    if (totalPages <= 1) {
+      box.innerHTML = "";
+      box.classList.add("hidden");
+      return;
+    }
+    box.classList.remove("hidden");
+    box.innerHTML = `
+      <button class="subtle" data-page="prev" ${page <= 1 ? "disabled" : ""}>上一页</button>
+      <span class="hint">第 ${page} / ${totalPages} 页 · 共 ${totalPosts} 篇</span>
+      <button class="subtle" data-page="next" ${page >= totalPages ? "disabled" : ""}>下一页</button>`;
+  }
+  $("#pagination").addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-page]");
+    if (!btn || btn.disabled) return;
+    const totalPages = Math.max(1, Math.ceil(totalPosts / PAGE_SIZE));
+    if (btn.dataset.page === "prev" && page > 1) { page--; loadPosts(); }
+    else if (btn.dataset.page === "next" && page < totalPages) { page++; loadPosts(); }
+  });
 
   async function loadBookings() {
     if (!currentUser) {
@@ -547,6 +579,7 @@
     if (error) return notify(error.message, true);
 
     recordPost();
+    page = 1;               // 新帖发布后回到第一页，确保能看到新帖
     form.reset();
     notify("发布成功！帖子已出现在列表顶部。");
     await syncUser();          // 刷新帖子列表，让用户看到发布成功，同时更新剩余次数
@@ -591,11 +624,12 @@
   });
 
   // ---- 筛选 ----
-  $("#refresh").addEventListener("click", loadPosts);
-  $("#typeFilter").addEventListener("change", loadPosts);
+  function reloadFromFirstPage() { page = 1; loadPosts(); }
+  $("#refresh").addEventListener("click", reloadFromFirstPage);
+  $("#typeFilter").addEventListener("change", reloadFromFirstPage);
   $("#cityFilter").addEventListener("input", () => {
     window.clearTimeout(window.citySearchTimer);
-    window.citySearchTimer = window.setTimeout(loadPosts, 250);
+    window.citySearchTimer = window.setTimeout(reloadFromFirstPage, 250);
   });
   supabase.auth.onAuthStateChange(() => syncUser());
 
