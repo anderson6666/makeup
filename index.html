@@ -753,7 +753,10 @@
     await loadPosts();
   }
 
+  let loadPostsToken = 0;
   async function loadPosts() {
+    // 并发保护：onAuthStateChange 可能连续触发多次加载，只让最后一次调用写 DOM
+    const token = ++loadPostsToken;
     const buildQuery = (columns) => {
       const type = $("#typeFilter").value;
       const city = $("#cityFilter").value.trim();
@@ -776,6 +779,7 @@
       const retry = await buildQuery(LEGACY);
       if (!retry.error) ({ data, error, count } = retry);
     }
+    if (token !== loadPostsToken) return;
     if (error) {
       $("#posts").innerHTML = '<p class="empty">帖子加载失败，请检查 Supabase 配置和数据库策略。</p>';
       renderPagination();
@@ -790,34 +794,41 @@
       return;
     }
 
-    commentsByPost = new Map();
+    // 先攒进局部变量，等全部数据就绪再一次性替换全局缓存。
+    // 直接往全局 Map 里 push 会踩异步竞态：loadPosts 可能被并发触发（onAuthStateChange
+    // 会连续派发 INITIAL_SESSION / SIGNED_IN 等），多个调用往同一个 Map 重复累加，
+    // 导致同一条评论被渲染多遍、评分人数被重复计数。
+    const nextComments = new Map();
     const { data: commentRows } = await supabase.from("comments")
       .select("id,post_id,user_id,author_name,content,image_url,created_at")
       .in("post_id", data.map((post) => post.id))
       .order("created_at", { ascending: true });
     for (const row of commentRows ?? []) {
-      if (!commentsByPost.has(row.post_id)) commentsByPost.set(row.post_id, []);
-      commentsByPost.get(row.post_id).push(row);
+      if (!nextComments.has(row.post_id)) nextComments.set(row.post_id, []);
+      nextComments.get(row.post_id).push(row);
     }
 
     // 加载本页出现的作者评分，按打分对象聚合
-    ratingsByTarget = new Map();
+    const nextRatings = new Map();
     const targetKeys = [...new Set(data.map(authorKey).filter(Boolean))];
     if (targetKeys.length) {
       const { data: ratingRows } = await supabase.from("ratings")
         .select("target_key,rater_key,stars")
         .in("target_key", targetKeys);
       for (const row of ratingRows ?? []) {
-        if (!ratingsByTarget.has(row.target_key)) {
-          ratingsByTarget.set(row.target_key, { sum: 0, count: 0, mine: 0 });
+        if (!nextRatings.has(row.target_key)) {
+          nextRatings.set(row.target_key, { sum: 0, count: 0, mine: 0 });
         }
-        const entry = ratingsByTarget.get(row.target_key);
+        const entry = nextRatings.get(row.target_key);
         entry.sum += row.stars;
         entry.count += 1;
         if (row.rater_key === raterKey()) entry.mine = row.stars;
       }
     }
 
+    if (token !== loadPostsToken) return;
+    commentsByPost = nextComments;
+    ratingsByTarget = nextRatings;
     $("#posts").innerHTML = data.map(renderPost).join("");
     renderPagination();
   }
