@@ -20,12 +20,15 @@ jobs:
           sleep 8
 
       - name: 访问 Supabase 接口
+        env:
+          SB_URL: https://ujusttdnqprpxmocdpys.supabase.co
+          SB_KEY: sb_publishable_zVOEvLiRF98FK7mv4XNJAw_NQnwgHsf
         run: |
           echo "--- auth health ---"
           curl -sS -o /dev/null -w "auth-health: %{http_code}\n" --max-time 30 \
-            "https://ujusttdnqprpxmocdpys.supabase.co/auth/v1/health" || true
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" \
+            "$SB_URL/auth/v1/health" || true
           echo "--- rest query ---"
           curl -sS -o /dev/null -w "rest-posts: %{http_code}\n" --max-time 30 \
-            -H "apikey: sb_publishable_zVOEvLiRF98FK7mv4XNJAw_NQnwgHsf" \
-            -H "Authorization: Bearer sb_publishable_zVOEvLiRF98FK7mv4XNJAw_NQnwgHsf" \
-            "https://ujusttdnqprpxmocdpys.supabase.co/rest/v1/posts?select=id&limit=1" || true
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" \
+            "$SB_URL/rest/v1/posts?select=id&limit=1" || true
