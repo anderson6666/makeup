@@ -93,3 +93,24 @@ with check (
   (auth.uid() is not null and rater_user_id = auth.uid())
   or (auth.uid() is null and rater_user_id is null and rater_visitor_id is not null)
 );
+
+-- 5) 图片存储（Supabase Storage）：帖子图片与评论图片
+--    与应用同域，国内网络可正常加载（imgbb 的 i.ibb.co 在国内不可达）
+insert into storage.buckets (id, name, public)
+values ('post-images', 'post-images', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "Public read post-images" on storage.objects;
+create policy "Public read post-images"
+on storage.objects for select
+to anon, authenticated
+using (bucket_id = 'post-images');
+
+drop policy if exists "Anyone can upload post-images" on storage.objects;
+create policy "Anyone can upload post-images"
+on storage.objects for insert
+to anon, authenticated
+with check (bucket_id = 'post-images');
+
+-- 6) 让 PostgREST 立即刷新表结构缓存
+notify pgrst, 'reload schema';
