@@ -595,34 +595,103 @@
 
   // ---- 图片上传（Supabase Storage，与应用同域，国内可访问）----
   const IMAGE_BUCKET = "post-images";
-  async function fileToResizedBlob(file, maxEdge = 1600) {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(new Error("读取图片失败。"));
-      reader.readAsDataURL(file);
-    });
-    const image = await new Promise((resolve, reject) => {
-      const element = new Image();
-      element.onload = () => resolve(element);
-      element.onerror = () => reject(new Error("图片解码失败。"));
-      element.src = dataUrl;
-    });
-    const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+
+  // ---- 压缩策略 ----
+  // 目标：最长边不超过 maxEdge、体积不超过 maxBytes，在达标的前提下用尽可能高的画质。
+  // 1) 优先 WebP（同画质比 JPEG 小 25%~35%），浏览器不支持时退回 JPEG；
+  // 2) 先固定尺寸、从高质量往下降，命中体积上限即停（避免无脑压到最低画质）；
+  // 3) 质量降到底仍超标，再按 80% 缩小尺寸重试，最多 4 轮；
+  // 4) 铺白底后再绘制，避免 PNG 透明区域在 JPEG/WebP 里变成黑块；
+  // 5) 高质量重采样，缩图不糊；
+  // 6) 本来就够小的图直接原样上传，不做二次压缩。
+  const IMAGE_RULES = {
+    post: { maxEdge: 1600, maxBytes: 300 * 1024 },
+    comment: { maxEdge: 1080, maxBytes: 180 * 1024 }
+  };
+
+  const WEBP_OK = (() => {
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(image.width * scale));
-    canvas.height = Math.max(1, Math.round(image.height * scale));
-    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-    return await new Promise((resolve, reject) =>
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("图片压缩失败。"))), "image/jpeg", 0.85));
+    canvas.width = canvas.height = 1;
+    return canvas.toDataURL("image/webp").startsWith("data:image/webp");
+  })();
+
+  async function decodeImage(file) {
+    if (window.createImageBitmap) {
+      try {
+        // imageOrientation: 按 EXIF 方向摆正，避免手机竖拍照片躺倒
+        return await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch { /* 退回 <img> 解码 */ }
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      return await new Promise((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error("图片解码失败。"));
+        element.src = url;
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
 
-  async function uploadImage(file) {
+  function drawToCanvas(source, width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(source, 0, 0, width, height);
+    return canvas;
+  }
+
+  function encode(canvas, type, quality) {
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), type, quality));
+  }
+
+  async function compressImage(file, rule) {
+    const { maxEdge, maxBytes } = rule;
+    const source = await decodeImage(file);
+    try {
+      const srcW = source.width || source.naturalWidth;
+      const srcH = source.height || source.naturalHeight;
+
+      // 尺寸和体积都已达标：原样上传，省一次重编码
+      if (Math.max(srcW, srcH) <= maxEdge && file.size <= maxBytes) return file;
+
+      const type = WEBP_OK ? "image/webp" : "image/jpeg";
+      let scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+      let blob = null;
+
+      for (let round = 0; round < 4; round++) {
+        const canvas = drawToCanvas(
+          source,
+          Math.max(1, Math.round(srcW * scale)),
+          Math.max(1, Math.round(srcH * scale))
+        );
+        for (let quality = 0.82; quality >= 0.5; quality -= 0.08) {
+          blob = await encode(canvas, type, quality);
+          if (blob && blob.size <= maxBytes) return blob;
+        }
+        scale *= 0.8;
+      }
+      return blob;
+    } finally {
+      if (source.close) source.close();
+    }
+  }
+
+  async function uploadImage(file, kind = "post") {
     if (!file) return null;
-    const blob = await fileToResizedBlob(file);
-    const path = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
+    const blob = await compressImage(file, IMAGE_RULES[kind] ?? IMAGE_RULES.post);
+    if (!blob) throw new Error("图片压缩失败，请换一张试试。");
+    const ext = blob.type === "image/webp" ? "webp" : blob.type === "image/png" ? "png" : "jpg";
+    const path = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
     const { error } = await supabase.storage.from(IMAGE_BUCKET).upload(path, blob, {
-      contentType: "image/jpeg",
+      contentType: blob.type || "image/jpeg",
       cacheControl: "31536000"
     });
     if (error) throw new Error(`图片上传失败：${error.message}`);
@@ -919,7 +988,7 @@
     btn.textContent = "发布中…";
 
     try {
-      const imageUrl = await uploadImage(file);
+      const imageUrl = await uploadImage(file, "post");
       const { error } = await supabase.from("posts").insert({
         user_id: currentUser?.id ?? null,
         visitor_id: currentUser ? null : getVisitorId(),
@@ -977,7 +1046,7 @@
     btn.textContent = "发表中…";
 
     try {
-      const imageUrl = await uploadImage(file);
+      const imageUrl = await uploadImage(file, "comment");
       const { error } = await supabase.from("comments").insert({
         post_id: Number(form.dataset.commentForm),
         user_id: currentUser?.id ?? null,
