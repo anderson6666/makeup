@@ -1,0 +1,31 @@
+name: Supabase Keepalive
+
+# 每天两次访问站点 + Supabase，防止免费项目因 7 天无访问被暂停
+# 说明：Supabase URL 和 key 是前端 index.html 里已公开的 publishable key，非机密。
+
+on:
+  schedule:
+    - cron: "30 1 * * *"    # UTC 01:30 = 北京时间 09:30
+    - cron: "30 13 * * *"   # UTC 13:30 = 北京时间 21:30
+  workflow_dispatch:        # 支持在 Actions 页面手动点一次运行
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 访问前端页面并停留
+        run: |
+          curl -sS -o /dev/null -w "frontend: %{http_code}\n" --max-time 30 \
+            https://anderson6666.github.io/makeup/ || true
+          sleep 8
+
+      - name: 访问 Supabase 接口
+        run: |
+          echo "--- auth health ---"
+          curl -sS -o /dev/null -w "auth-health: %{http_code}\n" --max-time 30 \
+            "https://ujusttdnqprpxmocdpys.supabase.co/auth/v1/health" || true
+          echo "--- rest query ---"
+          curl -sS -o /dev/null -w "rest-posts: %{http_code}\n" --max-time 30 \
+            -H "apikey: sb_publishable_zVOEvLiRF98FK7mv4XNJAw_NQnwgHsf" \
+            -H "Authorization: Bearer sb_publishable_zVOEvLiRF98FK7mv4XNJAw_NQnwgHsf" \
+            "https://ujusttdnqprpxmocdpys.supabase.co/rest/v1/posts?select=id&limit=1" || true
