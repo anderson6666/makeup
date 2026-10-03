@@ -127,6 +127,16 @@
     .comment-meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
     .comment-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .comment-form input[name="content"] { flex: 1; min-width: 150px; }
+    .rating-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 6px; font-size: 13px; }
+    .stars { position: relative; display: inline-block; font-size: 15px; line-height: 1; letter-spacing: 2px; }
+    .stars-bg { color: #dcd6c9; }
+    .stars-fg { position: absolute; left: 0; top: 0; overflow: hidden; white-space: nowrap; color: #f0a02a; }
+    .rating-score { font-weight: 700; color: #b8791f; }
+    .rating-count { color: var(--muted); font-size: 12px; }
+    .rate-stars { display: inline-flex; gap: 2px; cursor: pointer; margin-left: 4px; }
+    .rate-stars .star { color: #dcd6c9; font-size: 17px; line-height: 1; transition: transform .08s, color .12s; }
+    .rate-stars .star:hover { transform: scale(1.18); }
+    .rate-stars .star.on { color: #f0a02a; }
     .hidden { display: none !important; }
     .empty { padding: 16px 0; color: var(--muted); font-size: 14px; }
 
@@ -326,6 +336,7 @@
   let nickname = "";
   let submitting = false;
   let commentsByPost = new Map();
+  let ratingsByTarget = new Map();
   const PAGE_SIZE = 20;      // 每页 20 个帖子
   let page = 1;              // 当前页码
   let totalPosts = 0;        // 帖子总数（用于分页）
@@ -471,6 +482,26 @@
     if (currentUser && post.user_id === currentUser.id) return nickname || "我";
     return "妆友";
   }
+
+  // ---- 星级评分（按用户，满分 5 星）----
+  // 打分对象用 key 标识：登录用户 u:<uuid>，游客 v:<visitor_id>
+  function raterKey() {
+    return currentUser ? `u:${currentUser.id}` : `v:${getVisitorId()}`;
+  }
+  function authorKey(post) {
+    if (post.user_id) return `u:${post.user_id}`;
+    if (post.visitor_id) return `v:${post.visitor_id}`;
+    return "";
+  }
+  // 平均分四舍五入到 0.5 的整数倍（即以 .0 或 .5 结尾）
+  function roundHalf(value) { return Math.round(value * 2) / 2; }
+  function starsHtml(avg) {
+    const pct = Math.max(0, Math.min(100, (avg / 5) * 100));
+    return `<span class="stars" aria-label="平均 ${avg.toFixed(1)} 分">` +
+      `<span class="stars-bg">★★★★★</span>` +
+      `<span class="stars-fg" style="width:${pct}%">★★★★★</span>` +
+      `</span>`;
+  }
   function currentAvatarName() {
     return nickname || (currentUser && currentUser.email ? currentUser.email.split("@")[0] : "妆友");
   }
@@ -543,6 +574,24 @@
       commentsByPost.get(row.post_id).push(row);
     }
 
+    // 加载本页出现的作者评分，按打分对象聚合
+    ratingsByTarget = new Map();
+    const targetKeys = [...new Set(data.map(authorKey).filter(Boolean))];
+    if (targetKeys.length) {
+      const { data: ratingRows } = await supabase.from("ratings")
+        .select("target_key,rater_key,stars")
+        .in("target_key", targetKeys);
+      for (const row of ratingRows ?? []) {
+        if (!ratingsByTarget.has(row.target_key)) {
+          ratingsByTarget.set(row.target_key, { sum: 0, count: 0, mine: 0 });
+        }
+        const entry = ratingsByTarget.get(row.target_key);
+        entry.sum += row.stars;
+        entry.count += 1;
+        if (row.rater_key === raterKey()) entry.mine = row.stars;
+      }
+    }
+
     $("#posts").innerHTML = data.map(renderPost).join("");
     renderPagination();
   }
@@ -578,6 +627,23 @@
   function renderPost(post) {
     const typeLabel = post.type === "offer" ? "提供化妆" : "寻找化妆";
     const price = post.price == null ? "价格面议" : `¥${post.price}`;
+
+    // 作者评分（按用户聚合，平均分取近似值，.0 或 .5 结尾）
+    const key = authorKey(post);
+    const rating = ratingsByTarget.get(key);
+    const avg = rating && rating.count ? roundHalf(rating.sum / rating.count) : 0;
+    const isSelf = key && key === raterKey();
+    const avgLabel = rating && rating.count
+      ? `${starsHtml(avg)}<span class="rating-score">${avg.toFixed(1)}</span><span class="rating-count">（${rating.count} 人评分）</span>`
+      : '<span class="rating-count">暂无评分</span>';
+    const rateControl = key && !isSelf
+      ? `<span class="rate-stars" data-rate-target="${escapeHtml(key)}" title="点击星星给 TA 打分">${
+          [1, 2, 3, 4, 5].map((n) =>
+            `<span class="star${rating && rating.mine >= n ? " on" : ""}" data-star="${n}">★</span>`).join("")
+        }</span>`
+      : "";
+    const ratingLine = key ? `<div class="rating-line">${avgLabel}${rateControl}</div>` : "";
+
     return `
       <article class="post fade-in" data-post-id="${post.id}">
         <span class="avatar">${avatarHtml()}</span>
@@ -588,6 +654,7 @@
             <span class="tag">${escapeHtml(post.city)}</span>
             ${post.style ? `<span class="tag">${escapeHtml(post.style)}</span>` : ""}
           </div>
+          ${ratingLine}
           <h3>${escapeHtml(post.title)}</h3>
           <p>${escapeHtml(post.description)}</p>
           ${post.image_url ? `<img class="post-image" src="${escapeHtml(post.image_url)}" alt="帖子图片" loading="lazy">` : ""}
@@ -773,6 +840,39 @@
       submitting = false;
       btn.disabled = false;
       btn.textContent = "发表评论";
+    }
+  });
+
+  // ---- 打分（给其他用户评星，满分 5 星；同一对象可修改）----
+  $("#posts").addEventListener("click", async (event) => {
+    const star = event.target.closest("[data-star]");
+    if (!star) return;
+    const wrap = star.closest("[data-rate-target]");
+    if (!wrap || submitting) return;
+
+    const targetKey = wrap.dataset.rateTarget;
+    const stars = Number(star.dataset.star);
+    if (targetKey === raterKey()) return notify("不能给自己打分。", true);
+
+    submitting = true;
+    try {
+      const { error } = await supabase.from("ratings").upsert({
+        target_key: targetKey,
+        target_user_id: targetKey.startsWith("u:") ? targetKey.slice(2) : null,
+        target_visitor_id: targetKey.startsWith("v:") ? targetKey.slice(2) : null,
+        rater_key: raterKey(),
+        rater_user_id: currentUser?.id ?? null,
+        rater_visitor_id: currentUser ? null : getVisitorId(),
+        stars,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "rater_key,target_key" });
+      if (error) throw error;
+      notify(`已给 TA 打了 ${stars} 星。`);
+      await loadPosts();
+    } catch (err) {
+      notify(err?.message || "打分失败，请重试。", true);
+    } finally {
+      submitting = false;
     }
   });
 
