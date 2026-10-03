@@ -114,3 +114,73 @@ with check (bucket_id = 'post-images');
 
 -- 6) 让 PostgREST 立即刷新表结构缓存
 notify pgrst, 'reload schema';
+
+-- 7) 图片 30 天自动清理（文字永久保留）
+--    前置：先在 Dashboard → Database → Extensions 里启用 pg_cron 与 pg_net。
+--    首次还需把 service_role key 存进 Vault（只执行一次，替换成真实密钥）：
+--      select vault.create_secret('<你的 service_role key>', 'service_role_key');
+--    注意：存储文件必须走 Storage API 删除。直接 delete storage.objects 只会删掉元数据，
+--    真实文件会变成孤儿继续占用额度，Supabase 官方明确要求所有存储操作都走 API。
+create or replace function public.purge_old_images()
+returns integer
+language plpgsql
+security definer
+set search_path = public, storage
+as $$
+declare
+  key text;
+  names text[];
+begin
+  select decrypted_secret into key
+  from vault.decrypted_secrets
+  where name = 'service_role_key';
+
+  if key is null then
+    raise exception 'Vault 中缺少 service_role_key，请先执行 vault.create_secret';
+  end if;
+
+  select array_agg(name) into names
+  from storage.objects
+  where bucket_id = 'post-images'
+    and created_at < now() - interval '30 days';
+
+  if names is null then
+    return 0;
+  end if;
+
+  -- 只清空图片引用，帖子与评论的文字内容不动
+  update public.posts
+     set image_url = null
+   where image_url is not null
+     and split_part(image_url, '/', -1) = any(names);
+
+  update public.comments
+     set image_url = null
+   where image_url is not null
+     and split_part(image_url, '/', -1) = any(names);
+
+  -- 走 Storage API 真正删除文件
+  perform net.http_delete(
+    url := 'https://ujusttdnqprpxmocdpys.supabase.co/storage/v1/object/post-images',
+    headers := jsonb_build_object(
+      'apikey', key,
+      'Authorization', 'Bearer ' || key,
+      'Content-Type', 'application/json'
+    ),
+    body := jsonb_build_object('prefixes', to_jsonb(names)),
+    timeout_milliseconds := 10000
+  );
+
+  return array_length(names, 1);
+end;
+$$;
+
+-- 每天凌晨 3 点执行（可重复运行，不会重复建任务）
+do $$
+begin
+  if exists (select 1 from cron.job where jobname = 'purge-old-images') then
+    perform cron.unschedule('purge-old-images');
+  end if;
+end $$;
+
+select cron.schedule('purge-old-images', '0 3 * * *', $$ select public.purge_old_images(); $$);
